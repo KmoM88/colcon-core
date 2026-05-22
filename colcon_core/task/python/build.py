@@ -100,7 +100,23 @@ class PythonBuildTask(TaskExtensionPoint):
         available_commands = await self._get_available_commands(
             args.path, env)
 
-        if not args.symlink_install or 'develop' not in available_commands:
+        symlink_install = False
+        if args.symlink_install:
+            if 'develop' in available_commands:
+                available_options = await self._get_available_options(
+                    args.path, env, 'develop')
+                if '--editable' in available_options:
+                    symlink_install = True
+                else:
+                    logger.info(
+                        "No '--editable' capability in setuptools, falling "
+                        'back to full install')
+            else:
+                logger.info(
+                    "No 'develop' capability in setuptools, falling back to "
+                    'full install')
+
+        if not symlink_install:
             rc = await self._undo_develop(pkg, args, env)
             if rc:
                 return rc
@@ -209,7 +225,27 @@ class PythonBuildTask(TaskExtensionPoint):
                 continue
             commands.add(
                 line[2:index].decode(locale.getpreferredencoding(False)))
+        logger.debug(f"Available setuptools commands: {', '.join(commands)}")
         return commands
+
+    async def _get_available_options(self, path, env, command):
+        output = await check_output(
+            _PYTHON_CMD + ['setup.py', '--help', command], cwd=path, env=env)
+        options = set()
+        for line in output.splitlines():
+            if not line.startswith(b'  --'):
+                continue
+            try:
+                index = line.index(b' ', 4)
+            except ValueError:
+                continue
+            if index == 4:
+                continue
+            options.add(
+                line[2:index].decode(locale.getpreferredencoding(False)))
+        logger.debug(
+            f"Available setuptools '{command}' options: {', '.join(options)}")
+        return options
 
     async def _undo_develop(self, pkg, args, env):
         """
