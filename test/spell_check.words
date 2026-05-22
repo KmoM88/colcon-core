@@ -6,7 +6,6 @@ asyncio
 autouse
 backend
 backported
-basepath
 bazqux
 blocklist
 callables
@@ -55,6 +54,7 @@ https
 importlib
 importorskip
 isatty
+isdigit
 iterdir
 itertools
 junit
@@ -135,6 +135,7 @@ subprocesses
 symlink
 symlinks
 sysconfig
+takewhile
 tempfile
 terminalreporter
 testcase
