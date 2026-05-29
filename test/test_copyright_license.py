@@ -24,6 +24,8 @@ def check_files(paths):
             for p in sorted(path.iterdir()):
                 if p.name.startswith('.'):
                     continue
+                if p.name in ('build', 'install', 'log', 'venv'):
+                    continue
                 if p.name.endswith('.py') or p.is_dir():
                     missing += check_files([p])
         if path.is_file():

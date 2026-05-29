@@ -49,6 +49,7 @@ getpreferredencoding
 getsignal
 github
 hardcodes
+hatchling
 hookimpl
 hookwrapper
 https
@@ -157,6 +158,8 @@ unittest
 unittests
 unlinking
 unrenamed
+urllib
 usefixtures
+venv
 wildcards
 workaround

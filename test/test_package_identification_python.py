@@ -162,6 +162,7 @@ def test_create_dependency_descriptor():
 
 
 def test_identify_pep517(tmp_path):
+    """Test package identification and augmentation for PEP 517."""
     extension = PythonPackageIdentification()
     augmentation_extension = PythonPackageAugmentation()
 

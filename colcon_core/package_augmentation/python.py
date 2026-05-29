@@ -41,12 +41,14 @@ class PythonPackageAugmentation(PackageAugmentationExtensionPoint):
                 if 'build-system' in config or 'project' in config:
                     self._augment_pep517(desc, config)
                     return
-            except Exception as e:
-                logger.warning(f"Failed to parse pyproject.toml: {e}")
+            except Exception as e:  # noqa: B902
+                logger.warning(f'Failed to parse pyproject.toml: {e}')
 
         # 2. Check Feature Gate for Legacy setup.cfg fallback
         import os
-        enable_legacy = os.environ.get('COLCON_ENABLE_LEGACY_SETUP_CFG', '1').lower() in ('1', 'true', 'on')
+        enable_legacy = os.environ.get(
+            'COLCON_ENABLE_LEGACY_SETUP_CFG', '1'
+        ).lower() in ('1', 'true', 'on')
 
         # 3. Fallback to Legacy setup.cfg logic
         if enable_legacy:
@@ -97,12 +99,12 @@ class PythonPackageAugmentation(PackageAugmentationExtensionPoint):
             name = author.get('name')
             email = author.get('email')
             if name and email:
-                maintainers.append(f"{name} <{email}>")
+                maintainers.append(f'{name} <{email}>')
         for maintainer in project.get('maintainers', []):
             name = maintainer.get('name')
             email = maintainer.get('email')
             if name and email:
-                maintainers.append(f"{name} <{email}>")
+                maintainers.append(f'{name} <{email}>')
 
         if maintainers:
             desc.metadata.setdefault('maintainers', [])
@@ -128,7 +130,7 @@ def extract_pep517_dependencies(config):
     for dep in build_system.get('requires', []):
         try:
             dependencies['build'].add(create_dependency_descriptor(dep))
-        except Exception:
+        except Exception:  # noqa: B902
             pass
 
     # 2. Run dependencies from [project] dependencies (PEP 621)
@@ -136,17 +138,18 @@ def extract_pep517_dependencies(config):
     for dep in project.get('dependencies', []):
         try:
             dependencies['run'].add(create_dependency_descriptor(dep))
-        except Exception:
+        except Exception:  # noqa: B902
             pass
 
-    # 3. Test dependencies from [project.optional-dependencies] extra groups (test, tests, testing)
+    # 3. Test dependencies from [project.optional-dependencies]
+    # extra groups (test, tests, testing)
     optional = project.get('optional-dependencies', {})
     for extra_group, deps in optional.items():
         if extra_group in ('test', 'tests', 'testing'):
             for dep in deps:
                 try:
                     dependencies['test'].add(create_dependency_descriptor(dep))
-                except Exception:
+                except Exception:  # noqa: B902
                     pass
 
     return dependencies

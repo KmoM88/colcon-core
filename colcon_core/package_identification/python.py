@@ -37,12 +37,14 @@ class PythonPackageIdentification(PackageIdentificationExtensionPoint):
                     self._identify_pep517(desc, config)
                     if desc.type == 'python':
                         return
-            except Exception as e:
-                logger.warning(f"Failed to parse pyproject.toml: {e}")
+            except Exception as e:  # noqa: B902
+                logger.warning(f'Failed to parse pyproject.toml: {e}')
 
         # 2. Check Feature Gate for Legacy setup.cfg fallback
         import os
-        enable_legacy = os.environ.get('COLCON_ENABLE_LEGACY_SETUP_CFG', '1').lower() in ('1', 'true', 'on')
+        enable_legacy = os.environ.get(
+            'COLCON_ENABLE_LEGACY_SETUP_CFG', '1'
+        ).lower() in ('1', 'true', 'on')
 
         # 3. Fallback to Legacy setup.cfg logic
         if enable_legacy:
@@ -82,16 +84,21 @@ class PythonPackageIdentification(PackageIdentificationExtensionPoint):
                 try:
                     cfg = get_configuration(setup_cfg)
                     name = cfg.get('metadata', {}).get('name')
-                except Exception:
+                except Exception:  # noqa: B902
                     pass
 
         if not name:
             setup_py = desc.path / 'setup.py'
-            if setup_py.is_file() and is_reading_cfg_sufficient(setup_py) and (desc.path / 'setup.cfg').is_file():
+            setup_cfg = desc.path / 'setup.cfg'
+            if (
+                setup_py.is_file() and
+                is_reading_cfg_sufficient(setup_py) and
+                setup_cfg.is_file()
+            ):
                 try:
-                    cfg = get_configuration(desc.path / 'setup.cfg')
+                    cfg = get_configuration(setup_cfg)
                     name = cfg.get('metadata', {}).get('name')
-                except Exception:
+                except Exception:  # noqa: B902
                     pass
 
         if not name:
