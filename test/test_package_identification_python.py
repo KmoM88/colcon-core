@@ -159,3 +159,67 @@ def test_create_dependency_descriptor():
     commented_str = 'pkgname  # This is needed for foo'
     dep = create_dependency_descriptor(commented_str)
     assert dep.name == 'pkgname'
+
+
+def test_identify_pep517(tmp_path):
+    extension = PythonPackageIdentification()
+    augmentation_extension = PythonPackageAugmentation()
+
+    # Create a pure PEP 517 package
+    desc = PackageDescriptor(str(tmp_path))
+    pyproject = tmp_path / 'pyproject.toml'
+    pyproject.write_text(
+        '[build-system]\n'
+        "requires = ['hatchling', 'wheel']\n"
+        'build-backend = "hatchling.build"\n'
+        '[project]\n'
+        'name = "pep517-package"\n'
+        'version = "1.0.0"\n'
+        'dependencies = [\n'
+        '  "requests>=2.25.0",\n'
+        '  "urllib3"\n'
+        ']\n'
+        '[project.optional-dependencies]\n'
+        'test = ["pytest"]\n'
+        '[[project.authors]]\n'
+        'name = "Colcon Dev"\n'
+        'email = "dev@colcon.org"\n'
+    )
+
+    assert extension.identify(desc) is None
+    assert desc.name == 'pep517-package'
+    assert desc.type == 'python'
+
+    # Augment package metadata
+    augmentation_extension.augment_package(desc)
+    assert desc.metadata['version'] == '1.0.0'
+    assert desc.metadata['maintainers'] == ['Colcon Dev <dev@colcon.org>']
+    assert set(desc.dependencies.keys()) == {'build', 'run', 'test'}
+    assert desc.dependencies['build'] == {'hatchling', 'wheel'}
+    assert desc.dependencies['run'] == {'requests', 'urllib3'}
+    assert desc.dependencies['test'] == {'pytest'}
+
+    # Test feature gate for legacy setup.cfg
+    import os
+    from unittest.mock import patch
+
+    # Remove pyproject.toml and use setup.cfg / setup.py
+    pyproject.unlink()
+    (tmp_path / 'setup.py').write_text('setup()')
+    (tmp_path / 'setup.cfg').write_text(
+        '[metadata]\n'
+        'name = legacy-cfg-package\n'
+    )
+
+    desc = PackageDescriptor(str(tmp_path))
+    # When COLCON_ENABLE_LEGACY_SETUP_CFG is '0', it should NOT identify
+    with patch.dict(os.environ, {'COLCON_ENABLE_LEGACY_SETUP_CFG': '0'}):
+        assert extension.identify(desc) is None
+        assert desc.type is None
+        assert desc.name is None
+
+    # When COLCON_ENABLE_LEGACY_SETUP_CFG is '1' (default), it should identify
+    with patch.dict(os.environ, {'COLCON_ENABLE_LEGACY_SETUP_CFG': '1'}):
+        assert extension.identify(desc) is None
+        assert desc.type == 'python'
+        assert desc.name == 'legacy-cfg-package'
