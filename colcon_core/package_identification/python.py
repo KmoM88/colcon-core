@@ -59,7 +59,8 @@ class PythonPackageIdentification(PackageIdentificationExtensionPoint):
             if not is_reading_cfg_sufficient(setup_py):
                 logger.debug(
                     f"Python package in '{desc.path}' passes arguments to the "
-                    'setup() function which requires a different identification '
+                    'setup() function which requires a '
+                    'different identification '
                     f"extension than '{self.PACKAGE_IDENTIFICATION_NAME}'")
                 return
 
