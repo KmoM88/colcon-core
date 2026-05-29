@@ -32,37 +32,124 @@ class PythonPackageAugmentation(PackageAugmentationExtensionPoint):
         if desc.type != 'python':
             return
 
-        setup_py = desc.path / 'setup.py'
-        if not setup_py.is_file():
-            return
+        # 1. Try PEP 517 pyproject.toml package augmentation first
+        pyproject_toml = desc.path / 'pyproject.toml'
+        if pyproject_toml.is_file():
+            try:
+                from colcon_core.python_project.spec import toml_loads
+                config = toml_loads(pyproject_toml.read_text())
+                if 'build-system' in config or 'project' in config:
+                    self._augment_pep517(desc, config)
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to parse pyproject.toml: {e}")
 
-        setup_cfg = desc.path / 'setup.cfg'
-        if not setup_cfg.is_file():
-            return
+        # 2. Check Feature Gate for Legacy setup.cfg fallback
+        import os
+        enable_legacy = os.environ.get('COLCON_ENABLE_LEGACY_SETUP_CFG', '1').lower() in ('1', 'true', 'on')
 
-        if not is_reading_cfg_sufficient(setup_py):
-            return
+        # 3. Fallback to Legacy setup.cfg logic
+        if enable_legacy:
+            setup_py = desc.path / 'setup.py'
+            if not setup_py.is_file():
+                return
 
-        config = get_configuration(setup_cfg)
+            setup_cfg = desc.path / 'setup.cfg'
+            if not setup_cfg.is_file():
+                return
 
-        metadata = config.get('metadata', {})
-        version = metadata.get('version')
-        desc.metadata['version'] = version
+            if not is_reading_cfg_sufficient(setup_py):
+                return
 
-        options = config.get('options', {})
-        dependencies = extract_dependencies(options)
+            config = get_configuration(setup_cfg)
+
+            metadata = config.get('metadata', {})
+            version = metadata.get('version')
+            desc.metadata['version'] = version
+
+            options = config.get('options', {})
+            dependencies = extract_dependencies(options)
+            for k, v in dependencies.items():
+                desc.dependencies[k] |= v
+
+            def getter(env):
+                return options
+
+            desc.metadata['get_python_setup_options'] = getter
+
+            maintainers = _extract_maintainers_with_emails(metadata)
+            if maintainers:
+                desc.metadata.setdefault('maintainers', [])
+                desc.metadata['maintainers'] += maintainers
+
+    def _augment_pep517(self, desc, config):
+        project = config.get('project', {})
+        version = project.get('version')
+        if version:
+            desc.metadata['version'] = version
+
+        dependencies = extract_pep517_dependencies(config)
         for k, v in dependencies.items():
             desc.dependencies[k] |= v
 
-        def getter(env):
-            return options
+        maintainers = []
+        for author in project.get('authors', []):
+            name = author.get('name')
+            email = author.get('email')
+            if name and email:
+                maintainers.append(f"{name} <{email}>")
+        for maintainer in project.get('maintainers', []):
+            name = maintainer.get('name')
+            email = maintainer.get('email')
+            if name and email:
+                maintainers.append(f"{name} <{email}>")
 
-        desc.metadata['get_python_setup_options'] = getter
-
-        maintainers = _extract_maintainers_with_emails(metadata)
         if maintainers:
             desc.metadata.setdefault('maintainers', [])
             desc.metadata['maintainers'] += maintainers
+
+
+def extract_pep517_dependencies(config):
+    """
+    Get the dependencies of the PEP 517 package from pyproject.toml.
+
+    :param config: The parsed pyproject.toml dict
+    :returns: The dependencies
+    :rtype: dict(string, set(DependencyDescriptor))
+    """
+    dependencies = {
+        'build': set(),
+        'run': set(),
+        'test': set(),
+    }
+
+    # 1. Build dependencies from [build-system] requires (PEP 518)
+    build_system = config.get('build-system', {})
+    for dep in build_system.get('requires', []):
+        try:
+            dependencies['build'].add(create_dependency_descriptor(dep))
+        except Exception:
+            pass
+
+    # 2. Run dependencies from [project] dependencies (PEP 621)
+    project = config.get('project', {})
+    for dep in project.get('dependencies', []):
+        try:
+            dependencies['run'].add(create_dependency_descriptor(dep))
+        except Exception:
+            pass
+
+    # 3. Test dependencies from [project.optional-dependencies] extra groups (test, tests, testing)
+    optional = project.get('optional-dependencies', {})
+    for extra_group, deps in optional.items():
+        if extra_group in ('test', 'tests', 'testing'):
+            for dep in deps:
+                try:
+                    dependencies['test'].add(create_dependency_descriptor(dep))
+                except Exception:
+                    pass
+
+    return dependencies
 
 
 def extract_dependencies(options):
