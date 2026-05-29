@@ -13,6 +13,7 @@ callables
 capsys
 catched
 changelog
+chmod
 classname
 colcon
 coloredlogs

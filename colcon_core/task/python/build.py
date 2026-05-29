@@ -68,6 +68,16 @@ class PythonBuildTask(TaskExtensionPoint):
         except RuntimeError as e:
             logger.error(str(e))
             return 1
+
+        # Check if package is built via PEP 517
+        # (no setup.py, but has pyproject.toml)
+        setup_py = Path(args.path) / 'setup.py'
+        pyproject_toml = Path(args.path) / 'pyproject.toml'
+        is_pep517 = pyproject_toml.is_file() and not setup_py.is_file()
+
+        if is_pep517:
+            return await self._build_pep517(pkg, args, env, additional_hooks)
+
         setup_py_data = get_setup_data(self.context.pkg, env)
 
         # override installation locations
@@ -376,3 +386,78 @@ class PythonBuildTask(TaskExtensionPoint):
         # get_python_install_path avoids the deb_system scheme.
         if 'dist-packages' in self._get_python_lib(args):
             cmd += ['--install-layout', 'deb']
+
+    async def _build_pep517(self, pkg, args, env, additional_hooks):
+        from colcon_core.python_project.hook_caller import get_hook_caller
+        caller = get_hook_caller(pkg, env=env)
+
+        wheel_dir = os.path.join(args.build_base, 'wheel')
+        os.makedirs(wheel_dir, exist_ok=True)
+
+        logger.info(
+            f"Invoking PEP 517 build backend '{caller.backend_name}' "
+            'to build wheel')
+        wheel_filename = await caller.call_hook(
+            'build_wheel',
+            wheel_directory=wheel_dir)
+        wheel_path = os.path.join(wheel_dir, wheel_filename)
+        logger.info(f'Successfully generated PEP 517 wheel: {wheel_path}')
+
+        python_lib = os.path.join(
+            args.install_base, self._get_python_lib(args))
+        os.makedirs(python_lib, exist_ok=True)
+
+        pip_cmd = [
+            sys.executable,
+            '-m',
+            'pip',
+            'install',
+            '--no-index',
+            '--no-deps',
+            '--target',
+            python_lib,
+            wheel_path,
+        ]
+        logger.info(f'Unpacking generated wheel into target: {python_lib}')
+        completed = await run(
+            self.context, pip_cmd, cwd=args.build_base, env=env)
+        if completed.returncode:
+            logger.error(
+                'Failed to install wheel via pip: '
+                f'exit code {completed.returncode}')
+            return completed.returncode
+
+        # Generate console scripts wrappers
+        entry_points_txt = None
+        for p in Path(python_lib).glob('*.dist-info/entry_points.txt'):
+            entry_points_txt = p
+            break
+
+        if entry_points_txt and entry_points_txt.is_file():
+            parser = ConfigParser()
+            parser.optionxform = str
+            with open(str(entry_points_txt), 'r', encoding='utf-8') as f:
+                parser.read_file(f)
+            if 'console_scripts' in parser:
+                script_dir = os.path.join(args.install_base, 'bin')
+                os.makedirs(script_dir, exist_ok=True)
+                for script_name, entry_point in parser['console_scripts'].items():  # noqa: E501
+                    script_path = os.path.join(script_dir, script_name)
+                    module_path, func_name = entry_point.split(':')
+                    script_content = (
+                        f'#!{sys.executable}\n'
+                        '# -*- coding: utf-8 -*-\n'
+                        'import sys\n'
+                        f'from {module_path} import {func_name}\n'
+                        "if __name__ == '__main__':\n"
+                        f'    sys.exit({func_name}())\n'
+                    )
+                    with open(script_path, 'w', encoding='utf-8') as sf:
+                        sf.write(script_content)
+                    os.chmod(script_path, 0o755)
+
+        hooks = create_environment_hooks(args.install_base, pkg.name)
+        create_environment_scripts(
+            pkg, args, default_hooks=hooks,
+            additional_hooks=additional_hooks)
+        return 0

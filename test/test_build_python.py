@@ -191,3 +191,58 @@ def test_build_package(
     _test_build_package(
         tmp_path_str, symlink_install=not symlink_first, setup_cfg=setup_cfg,
         libexec_pattern=libexec_pattern, data_files=data_files)
+
+
+def test_build_pep517(tmp_path):
+    """Test building a Python package via PEP 517 build task."""
+    event_loop = new_event_loop()
+    asyncio.set_event_loop(event_loop)
+    try:
+        python_build_task = PythonBuildTask()
+        package = PackageDescriptor(tmp_path / 'src')
+        package.name = 'test-pep517-package'
+        package.type = 'python'
+
+        context = TaskContext(
+            pkg=package,
+            args=SimpleNamespace(
+                path=str(tmp_path / 'src'),
+                build_base=str(tmp_path / 'build'),
+                install_base=str(tmp_path / 'install'),
+                symlink_install=False,
+            ),
+            dependencies={}
+        )
+        python_build_task.set_context(context=context)
+
+        pkg = python_build_task.context.pkg
+        pkg.path.mkdir(parents=True, exist_ok=True)
+
+        # Write pyproject.toml using setuptools backend
+        (pkg.path / 'pyproject.toml').write_text(
+            '[build-system]\n'
+            'requires = ["setuptools>=61.0.0", "wheel"]\n'
+            'build-backend = "setuptools.build_meta"\n'
+            '[project]\n'
+            'name = "test-pep517-package"\n'
+            'version = "1.0.0"\n'
+            '[project.scripts]\n'
+            'test-pep517-command = "my_module:main"\n'
+        )
+
+        (pkg.path / 'my_module.py').write_text(
+            'def main():\n'
+            '    print("Hello, PEP 517!")\n'
+        )
+
+        rc = event_loop.run_until_complete(python_build_task.build())
+        assert not rc
+
+        install_base = Path(python_build_task.context.args.install_base)
+        # Check that files were unpacked in the install directory
+        assert any(install_base.rglob('my_module.py'))
+        assert any(install_base.rglob('*.dist-info/METADATA'))
+        assert any(install_base.rglob('*.dist-info/entry_points.txt'))
+        assert any(install_base.rglob('bin/test-pep517-command'))
+    finally:
+        event_loop.close()
