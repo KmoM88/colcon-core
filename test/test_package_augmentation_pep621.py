@@ -5,6 +5,8 @@
 
 from colcon_core.package_augmentation.pep621 import PEP621PackageAugmentation
 from colcon_core.package_descriptor import PackageDescriptor
+from colcon_core.task.python import get_setup_data
+from colcon_core.task.python.test import has_test_dependency
 
 
 def test_augment_pep621_authors(tmp_path):
@@ -80,3 +82,39 @@ def test_augment_ignore_non_python_project(tmp_path):
     desc.type = 'python'
     ext.augment_package(desc)
     assert not desc.dependencies
+
+
+def test_augment_pep621_setup_options_and_dependency_groups(tmp_path):
+    """Test get_python_setup_options and PEP 735 dependency-groups support."""
+    ext = PEP621PackageAugmentation()
+
+    (tmp_path / 'pyproject.toml').write_text(
+        '[project]\n'
+        'name = "my-pkg"\n'
+        'version = "1.0.0"\n'
+        'dependencies = ["requests >= 2.0"]\n'
+        '[project.optional-dependencies]\n'
+        'testing = ["pytest-mock"]\n'
+        '[dependency-groups]\n'
+        'base_test = ["pytest >= 7.0", {include-group = "test"}]\n'
+        'test = [{include-group = "base-test"}, "pytest-cov"]\n',
+        encoding='utf-8',
+    )
+
+    desc = PackageDescriptor(str(tmp_path))
+    desc.name = 'my-pkg'
+    desc.type = 'python.project'
+
+    ext.augment_package(desc)
+
+    assert desc.dependencies['run'] == {'requests'}
+    assert desc.dependencies['test'] == {
+        'pytest',
+        'pytest-cov',
+        'pytest-mock',
+    }
+
+    setup_data = get_setup_data(desc, {})
+    assert has_test_dependency(setup_data, 'pytest')
+    assert has_test_dependency(setup_data, 'pytest-cov')
+    assert has_test_dependency(setup_data, 'pytest-mock')
