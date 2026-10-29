@@ -541,6 +541,7 @@ packages = ["st_data_pkg"]
     assert installed_launch.is_symlink()
     assert os.path.samefile(installed_launch, launch_file)
 
+
 def test_integration_python_project_test_task(tmp_path):
     """Test end-to-end PythonProjectBuildTask + PythonProjectTestTask."""
     pytest.importorskip('flit_core')
@@ -627,3 +628,36 @@ def test_integration_python_project_test_task(tmp_path):
     rc = run_until_complete(test_task.test())
     assert not rc
     assert (test_result_base / 'pytest.xml').is_file()
+
+
+def test_integration_dynamic_metadata_flit_core(tmp_path):
+    """Test real PEP 517 dynamic version resolution via flit_core."""
+    pytest.importorskip('flit_core')
+
+    pkg_dir = tmp_path / 'src' / 'dynamic_flit_pkg'
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / 'pyproject.toml').write_text(
+        '[build-system]\n'
+        'requires = ["flit_core >=3.2,<4"]\n'
+        'build-backend = "flit_core.buildapi"\n'
+        '\n'
+        '[project]\n'
+        'name = "dynamic_flit_pkg"\n'
+        'dynamic = ["version", "description"]\n',
+        encoding='utf-8',
+    )
+    mod_dir = pkg_dir / 'dynamic_flit_pkg'
+    mod_dir.mkdir()
+    (mod_dir / '__init__.py').write_text(
+        '"""Dynamic flit package."""\n'
+        '__version__ = "3.4.5"\n',
+        encoding='utf-8',
+    )
+
+    desc = PackageDescriptor(pkg_dir)
+    PEP621PackageIdentification().identify(desc)
+    assert desc.type == 'python.project'
+
+    PEP621PackageAugmentation().augment_package(desc)
+    assert desc.metadata.get('version') == '3.4.5'
+    assert 'get_python_project_metadata' in desc.metadata

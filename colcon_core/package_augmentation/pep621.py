@@ -3,17 +3,65 @@
 
 """Package augmentation for PEP 621 packages."""
 
+import asyncio
+from email.utils import getaddresses
 import logging
 import re
+from subprocess import CalledProcessError
 
+from colcon_core.package_augmentation import logger
 from colcon_core.package_augmentation \
     import PackageAugmentationExtensionPoint
 from colcon_core.package_augmentation.python \
     import create_dependency_descriptor
 from colcon_core.package_augmentation.python import extract_dependencies
 from colcon_core.plugin_system import satisfies_version
+from colcon_core.python_project.metadata import load_and_cache_metadata
+from colcon_core.python_project.metadata import options_from_metadata
 from colcon_core.python_project.spec import load_and_cache_spec
 from colcon_core.python_project.spec import SPEC_NAME
+from colcon_core.subprocess import new_event_loop
+
+_DYNAMIC_FIELDS = {
+    'authors',
+    'dependencies',
+    'maintainers',
+    'optional-dependencies',
+    'version',
+}
+
+
+def _load_dynamic_metadata(desc):
+    loop = new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(load_and_cache_metadata(desc))
+    except (CalledProcessError, OSError, RuntimeError, ValueError) as e:
+        logger.warning(
+            f"Failed to load dynamic metadata for '{desc.name}': {e}")
+        return None
+    finally:
+        loop.close()
+
+
+def _augment_maintainers_from_metadata(desc, metadata):
+    raw_headers = (
+        metadata.get_all('Maintainer-email') or
+        metadata.get_all('Author-email') or
+        ()
+    )
+    if not raw_headers:
+        return
+    desc.metadata.setdefault('maintainers', [])
+    for person_name, email_address in getaddresses(raw_headers):
+        if not email_address:
+            continue
+        rfc822 = (
+            f'{person_name} <{email_address}>'
+            if person_name else email_address
+        )
+        if rfc822 not in desc.metadata['maintainers']:
+            desc.metadata['maintainers'].append(rfc822)
 
 
 def _normalize_group_name(name):
@@ -79,7 +127,7 @@ def _extract_pyproject_options(spec):
 
 
 class PEP621PackageAugmentation(PackageAugmentationExtensionPoint):
-    """Augment Python packages with static metadata from `pyproject.toml`."""
+    """Augment Python packages with metadata from `pyproject.toml`."""
 
     def __init__(self):  # noqa: D107
         super().__init__()
@@ -138,3 +186,32 @@ class PEP621PackageAugmentation(PackageAugmentationExtensionPoint):
                 rfc822 = f'{name} <{email}>' if name else email
                 if rfc822 not in desc.metadata['maintainers']:
                     desc.metadata['maintainers'].append(rfc822)
+
+        dynamic_fields = set(project.get('dynamic') or ()) & _DYNAMIC_FIELDS
+        if dynamic_fields:
+            metadata = _load_dynamic_metadata(desc)
+            if metadata is not None:
+                dyn_options = options_from_metadata(metadata)
+                if (
+                    'dependencies' in dynamic_fields and
+                    dyn_options.get('install_requires')
+                ):
+                    options['install_requires'] = list(
+                        dyn_options['install_requires'])
+                    desc.dependencies['run'].update(
+                        create_dependency_descriptor(d)
+                        for d in options['install_requires'])
+                if (
+                    'optional-dependencies' in dynamic_fields and
+                    dyn_options.get('extras_require')
+                ):
+                    options.setdefault('extras_require', {}).update(
+                        dyn_options['extras_require'])
+                    dyn_extracted = extract_dependencies(
+                        {'extras_require': dyn_options['extras_require']})
+                    desc.dependencies['test'].update(
+                        dyn_extracted.get('test') or set())
+                if 'version' in dynamic_fields and metadata.get('Version'):
+                    desc.metadata['version'] = metadata['Version']
+                if {'authors', 'maintainers'} & dynamic_fields:
+                    _augment_maintainers_from_metadata(desc, metadata)

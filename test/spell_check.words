@@ -54,6 +54,7 @@ fooo
 fromhex
 fsrc
 functools
+getaddresses
 getcategory
 getinfo
 getpid
