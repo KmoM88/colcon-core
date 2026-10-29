@@ -330,4 +330,16 @@ def install(args, rel_src, rel_dst):
         elif os.path.isdir(dst):
             shutil.rmtree(dst)
         if not os.path.exists(dst):
-            os.symlink(src, dst)
+            try:
+                os.symlink(src, dst)
+            except OSError as e:
+                if (
+                    sys.platform == 'win32' and
+                    getattr(e, 'winerror', None) == 1314
+                ):
+                    logger.warning(
+                        f"Could not create symbolic link '{dst}' due to "
+                        'missing privileges; falling back to copying the file')
+                    shutil.copy(src, dst)
+                else:
+                    raise
