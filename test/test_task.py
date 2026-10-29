@@ -252,3 +252,43 @@ def test_install(tmp_path):
     assert path.is_file()
     assert path.is_symlink()
     assert path.samefile(os.path.join(args.path, 'source2.txt'))
+
+
+def _make_winerror(code, msg):
+    if os.name == 'nt':
+        return OSError(13, msg, None, code)
+    err = OSError(msg)
+    err.winerror = code
+    return err
+
+
+def test_install_windows_symlink_privilege_fallback(tmp_path):
+    args = Mock()
+    args.path = str(tmp_path / 'path')
+    args.install_base = str(tmp_path / 'install')
+    args.symlink_install = True
+
+    os.makedirs(args.path)
+    src_file = tmp_path / 'path' / 'source.txt'
+    src_file.write_text('fallback content', encoding='utf-8')
+
+    priv_err = _make_winerror(
+        1314, 'A required privilege is not held by the client')
+
+    with patch('colcon_core.task.sys.platform', 'win32'), \
+            patch('colcon_core.task.os.symlink', side_effect=priv_err), \
+            patch('colcon_core.task.logger.warning') as warn_mock:
+        install(args, 'source.txt', 'destination.txt')
+
+    dst_file = tmp_path / 'install' / 'destination.txt'
+    assert dst_file.is_file()
+    assert not dst_file.is_symlink()
+    assert dst_file.read_text(encoding='utf-8') == 'fallback content'
+    assert warn_mock.call_count == 1
+
+    # Non-privilege OSError on Windows must still propagate
+    other_err = _make_winerror(5, 'disk error')
+    with patch('colcon_core.task.sys.platform', 'win32'), \
+            patch('colcon_core.task.os.symlink', side_effect=other_err):
+        with pytest.raises(OSError):
+            install(args, 'source.txt', 'destination_fail.txt')
