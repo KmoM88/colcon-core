@@ -11,6 +11,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+from colcon_core import plugin_system
+from colcon_core.extension_point import clear_entry_point_cache
 from colcon_core.package_augmentation.pep621 \
     import PEP621PackageAugmentation
 from colcon_core.package_descriptor import PackageDescriptor
@@ -22,6 +24,16 @@ from colcon_core.task.python_project.build import PythonProjectBuildTask
 import pytest
 
 from .run_until_complete import run_until_complete
+
+
+@pytest.fixture(autouse=True)
+def isolate_extension_cache_and_event_queue(monkeypatch):
+    """Clear cached entry points and ignore direct task output events."""
+    clear_entry_point_cache()
+    plugin_system._extension_instances.clear()
+    monkeypatch.setattr(
+        TaskContext, 'put_event_into_queue', lambda *args: None
+    )
 
 
 def test_integration_flit_core_minimal(tmp_path):
@@ -345,3 +357,36 @@ dependencies = []
     finally:
         if str(lib_dir) in sys.path:
             sys.path.remove(str(lib_dir))
+
+
+def test_integration_dynamic_metadata_flit_core(tmp_path):
+    """Test real PEP 517 dynamic version resolution via flit_core."""
+    pytest.importorskip('flit_core')
+
+    pkg_dir = tmp_path / 'src' / 'dynamic_flit_pkg'
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / 'pyproject.toml').write_text(
+        '[build-system]\n'
+        'requires = ["flit_core >=3.2,<4"]\n'
+        'build-backend = "flit_core.buildapi"\n'
+        '\n'
+        '[project]\n'
+        'name = "dynamic_flit_pkg"\n'
+        'dynamic = ["version", "description"]\n',
+        encoding='utf-8',
+    )
+    mod_dir = pkg_dir / 'dynamic_flit_pkg'
+    mod_dir.mkdir()
+    (mod_dir / '__init__.py').write_text(
+        '"""Dynamic flit package."""\n'
+        '__version__ = "3.4.5"\n',
+        encoding='utf-8',
+    )
+
+    desc = PackageDescriptor(pkg_dir)
+    PEP621PackageIdentification().identify(desc)
+    assert desc.type == 'python.project'
+
+    PEP621PackageAugmentation().augment_package(desc)
+    assert desc.metadata.get('version') == '3.4.5'
+    assert 'get_python_project_metadata' in desc.metadata

@@ -1,10 +1,11 @@
-# Copyright 2022 Open Source Robotics Foundation, Inc.
+# Copyright 2022-2026 Open Source Robotics Foundation, Inc.
 # Licensed under the Apache License, Version 2.0
 
 """Metadata helpers for python.project packages."""
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from zipfile import ZipFile
 
 from colcon_core.python_project.hook_caller_decorator \
     import get_decorated_hook_caller
@@ -27,14 +28,33 @@ async def load_metadata(desc):
     """
     Load metadata for a Python project using PEP 517.
 
+    Uses ``prepare_metadata_for_build_wheel`` when implemented by the build
+    backend, falling back to ``build_wheel`` per PEP 517 otherwise.
+
     :param desc: The package descriptor
     """
     hook_caller = get_decorated_hook_caller(desc)
+    hooks = await hook_caller.list_hooks()
     with TemporaryDirectory() as md_dir:
-        md_name = await hook_caller.call_hook(
-            'prepare_metadata_for_build_wheel', metadata_directory=md_dir)
-        md_path = Path(md_dir) / md_name
-        return Distribution.at(md_path).metadata
+        if 'prepare_metadata_for_build_wheel' in hooks:
+            md_name = await hook_caller.call_hook(
+                'prepare_metadata_for_build_wheel', metadata_directory=md_dir)
+            md_path = Path(md_dir) / md_name
+            return Distribution.at(md_path).metadata
+
+        wheel_name = await hook_caller.call_hook(
+            'build_wheel', wheel_directory=md_dir)
+        wheel_path = Path(md_dir) / wheel_name
+        extract_dir = Path(md_dir) / 'extracted'
+        with ZipFile(wheel_path) as wf:
+            for member in wf.namelist():
+                if '.dist-info/' in member:
+                    wf.extract(member, extract_dir)
+        dist_info_dirs = list(extract_dir.glob('*.dist-info'))
+        if not dist_info_dirs:
+            raise RuntimeError(
+                f"Built wheel '{wheel_name}' contains no .dist-info directory")
+        return Distribution.at(dist_info_dirs[0]).metadata
 
 
 async def load_and_cache_metadata(desc):
