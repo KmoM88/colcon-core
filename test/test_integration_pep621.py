@@ -11,6 +11,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+from colcon_core import plugin_system
+from colcon_core.extension_point import clear_entry_point_cache
 from colcon_core.package_augmentation.pep621 \
     import PEP621PackageAugmentation
 from colcon_core.package_descriptor import PackageDescriptor
@@ -19,9 +21,20 @@ from colcon_core.package_identification.pep621 \
 from colcon_core.python_project.wheel import remove_distributions
 from colcon_core.task import TaskContext
 from colcon_core.task.python_project.build import PythonProjectBuildTask
+from colcon_core.task.python_project.test import PythonProjectTestTask
 import pytest
 
 from .run_until_complete import run_until_complete
+
+
+@pytest.fixture(autouse=True)
+def isolate_extension_cache_and_event_queue(monkeypatch):
+    """Clear cached entry points and ignore direct task output events."""
+    clear_entry_point_cache()
+    plugin_system._extension_instances.clear()
+    monkeypatch.setattr(
+        TaskContext, 'put_event_into_queue', lambda *args: None
+    )
 
 
 def test_integration_flit_core_minimal(tmp_path):
@@ -345,3 +358,91 @@ dependencies = []
     finally:
         if str(lib_dir) in sys.path:
             sys.path.remove(str(lib_dir))
+
+
+def test_integration_python_project_test_task(tmp_path):
+    """Test end-to-end PythonProjectBuildTask + PythonProjectTestTask."""
+    pytest.importorskip('flit_core')
+
+    pkg_dir = tmp_path / 'src' / 'tested_pkg'
+    pkg_dir.mkdir(parents=True)
+
+    (pkg_dir / 'pyproject.toml').write_text(
+        '[build-system]\n'
+        'requires = ["flit_core >=3.2,<4"]\n'
+        'build-backend = "flit_core.buildapi"\n'
+        '\n'
+        '[project]\n'
+        'name = "tested_pkg"\n'
+        'version = "0.1.0"\n'
+        'description = "Testable PEP 621 package"\n'
+        '\n'
+        '[dependency-groups]\n'
+        'test = ["pytest"]\n',
+        encoding='utf-8',
+    )
+    mod_dir = pkg_dir / 'tested_pkg'
+    mod_dir.mkdir()
+    (mod_dir / '__init__.py').write_text(
+        '"""Tested package."""\n'
+        'def add(a, b):\n'
+        '    return a + b\n',
+        encoding='utf-8',
+    )
+    tests_dir = pkg_dir / 'tests'
+    tests_dir.mkdir()
+    (tests_dir / 'test_add.py').write_text(
+        'from tested_pkg import add\n\n\n'
+        'def test_add():\n'
+        '    assert add(2, 3) == 5\n',
+        encoding='utf-8',
+    )
+
+    desc = PackageDescriptor(pkg_dir)
+    PEP621PackageIdentification().identify(desc)
+    PEP621PackageAugmentation().augment_package(desc)
+
+    build_base = tmp_path / 'build' / 'tested_pkg'
+    install_base = tmp_path / 'install'
+    test_result_base = tmp_path / 'test_results' / 'tested_pkg'
+    build_base.mkdir(parents=True)
+    install_base.mkdir(parents=True)
+
+    build_task = PythonProjectBuildTask()
+    build_task.set_context(
+        context=TaskContext(
+            pkg=desc,
+            args=SimpleNamespace(
+                path=str(pkg_dir),
+                build_base=str(build_base),
+                install_base=str(install_base),
+                symlink_install=False,
+            ),
+            dependencies={},
+        )
+    )
+    assert run_until_complete(build_task.build()) is None
+
+    events = []
+    test_context = TaskContext(
+        pkg=desc,
+        args=SimpleNamespace(
+            path=str(pkg_dir),
+            build_base=str(build_base),
+            install_base=str(install_base),
+            test_result_base=str(test_result_base),
+            python_testing=None,
+            pytest_args=None,
+            pytest_with_coverage=False,
+            retest_until_fail=0,
+            retest_until_pass=0,
+        ),
+        dependencies={desc.name: str(install_base)},
+    )
+    test_context.put_event_into_queue = events.append
+
+    test_task = PythonProjectTestTask()
+    test_task.set_context(context=test_context)
+    rc = run_until_complete(test_task.test())
+    assert not rc
+    assert (test_result_base / 'pytest.xml').is_file()
