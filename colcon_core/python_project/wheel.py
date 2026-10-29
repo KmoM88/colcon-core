@@ -227,22 +227,24 @@ def install_wheel(wheel_path, install_base, script_dir_override=None):
                 with TextIOWrapper(wf_ep_bin) as wf_ep:
                     ep.read_file(wf_ep)
             if ep.has_section('console_scripts'):
-                if script_dir_override:
-                    script_dir = install_base / script_dir_override
-                else:
-                    script_dir = Path(
-                        _get_install_path('scripts', install_base))
-                sm = _get_script_maker(script_dir)
                 specs = [
                     '%s = %s' % pair
                     for pair in ep.items('console_scripts')
                 ]
-                scripts_made = sm.make_multiple(specs)
+                if specs:
+                    if script_dir_override:
+                        script_dir = install_base / script_dir_override
+                    else:
+                        script_dir = Path(
+                            _get_install_path('scripts', install_base))
+                    script_dir.mkdir(parents=True, exist_ok=True)
+                    sm = _get_script_maker(script_dir)
+                    scripts_made = sm.make_multiple(specs)
 
-                records += [
-                    (Path(os.path.relpath(s, libdir)).as_posix(), '', '')
-                    for s in scripts_made
-                ]
+                    records += [
+                        (Path(os.path.relpath(s, libdir)).as_posix(), '', '')
+                        for s in scripts_made
+                    ]
 
         with (libdir / record_file).open('w') as f:
             f.writelines(','.join(rec) + '\n' for rec in records)

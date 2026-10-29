@@ -11,6 +11,7 @@ from zipfile import ZipFile
 
 from colcon_core.python_project.distribution import _get_install_path
 from colcon_core.python_project.wheel import install_wheel
+from colcon_core.python_project.wheel import remove_distributions
 
 
 def create_dummy_wheel(
@@ -223,3 +224,36 @@ def test_install_wheel_cleanup_old(tmp_path):
     # Verify v2 files are installed
     assert dist_info_v2.is_dir()
     assert (libdir / 'dummy_pkg' / 'v2.py').is_file()
+
+
+def test_install_wheel_rebuild_after_remove_distributions(tmp_path):
+    """
+    Test repeated installation with cached ScriptMaker after pruning scripts.
+
+    :param Path tmp_path: pytest fixture providing a temp directory
+    """
+    wheel_path = tmp_path / 'dummy_pkg-1.0.0-py3-none-any.whl'
+    create_dummy_wheel(
+        wheel_path,
+        'dummy_pkg',
+        '1.0.0',
+        console_scripts={'my-cli': 'dummy_pkg:main'},
+    )
+
+    install_base = tmp_path / 'install'
+    custom_rel = Path('lib') / 'dummy_pkg'
+    script_dir = install_base / custom_rel
+
+    # First install creates script_dir and caches ScriptMaker(script_dir)
+    install_wheel(wheel_path, install_base, script_dir_override=custom_rel)
+    assert script_dir.is_dir()
+    assert any(p.name.startswith('my-cli') for p in script_dir.iterdir())
+
+    # Removing distribution removes the script and prunes empty script_dir
+    remove_distributions('dummy_pkg', install_base)
+    assert not script_dir.exists()
+
+    # Second install in the same process must recreate script_dir cleanly
+    install_wheel(wheel_path, install_base, script_dir_override=custom_rel)
+    assert script_dir.is_dir()
+    assert any(p.name.startswith('my-cli') for p in script_dir.iterdir())
